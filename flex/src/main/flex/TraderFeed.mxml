@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<s:Application
+	xmlns="*"
+	xmlns:fx="http://ns.adobe.com/mxml/2009" 
+	xmlns:s="library://ns.adobe.com/flex/spark" 
+	xmlns:mx="library://ns.adobe.com/flex/mx"
+	pageTitle="GraniteDS Trader Feed Sample"
+	creationComplete="init(event)">
+
+	<fx:Style source="style.css" />
+	
+	<fx:Script>
+		<![CDATA[
+			import mx.controls.Alert;
+			import mx.events.FlexEvent;
+			import mx.messaging.events.ChannelEvent;
+			import mx.messaging.events.ChannelFaultEvent;
+			import mx.messaging.events.MessageAckEvent;
+			import mx.messaging.events.MessageEvent;
+			import mx.messaging.events.MessageFaultEvent;
+			import mx.messaging.messages.AcknowledgeMessage;
+			import mx.messaging.messages.AcknowledgeMessageExt;
+			import mx.messaging.messages.AsyncMessage;
+			
+			import org.granite.gravity.Consumer;
+			import org.graniteds.traderfeed.Stock;
+			
+			import spark.formatters.NumberFormatter;
+		
+			// Declare a Gravity Consumer (receive messages).
+			private var consumer:Consumer = null;
+			
+			private var stockIds:Array = [ "IBM", "ORCL", "GOOG", "MSFT", "AAPL", "ADBE", "EMC", "YHOO", "RHT", "FB", "INTC", "CSCO", "AMZN" ];
+			private var currentIds:Array = [ "IBM", "ORCL", "GOOG" ];
+			
+			[Bindable]
+			private var remainingIds:ArrayCollection;
+			
+			[Bindable]
+			private var subscribed:Boolean = false;
+			
+			private function init(event:FlexEvent):void {
+				subscribe();
+				var ids:Array = stockIds.filter(function(item:*, index:int, array:Array):Boolean { return currentIds.indexOf(item) < 0 }); 
+				remainingIds = new ArrayCollection(ids);
+			}
+			
+			// Connect the Consumer to the 'market-data-feed' destination
+			// (see services-config.xml) and the 'stock' topic
+			// with a selector containing the currently selected values.
+			private function subscribe():void {
+				consumer = new Consumer();
+				consumer.destination = "market-data-feed";
+				consumer.topic = "stock";
+				consumer.selector = "code IN ('" + currentIds.join("', '") + "')";
+				consumer.addEventListener(MessageAckEvent.ACKNOWLEDGE, subscribeHandler);
+				consumer.addEventListener(MessageFaultEvent.FAULT, subscribeFaultHandler);
+				consumer.addEventListener(ChannelFaultEvent.FAULT, subscribeFaultHandler);
+				consumer.addEventListener(MessageEvent.MESSAGE, messageHandler);
+				consumer.subscribe();
+			}
+			
+			// Handler for subscription success
+			private function subscribeHandler(event:Event):void {
+				consumer.removeEventListener(MessageAckEvent.ACKNOWLEDGE, subscribeHandler);
+				consumer.removeEventListener(MessageFaultEvent.FAULT, subscribeFaultHandler);
+				consumer.removeEventListener(ChannelFaultEvent.FAULT, subscribeFaultHandler);
+				subscribed = true;
+			}
+			
+			// Handler for subscription failure
+			// event can be either a ChannelFaultEvent or a MessageFaultEvent depending on the kind of error
+			private function subscribeFaultHandler(event:Event):void {
+				Alert.show("Could not subscribe to stock market topic\n" + Object(event).faultDetail);
+			}
+			
+			// Listener method for the Consumer message events: receive incoming stock values
+			// and set them in the current table.
+			private function messageHandler(event:MessageEvent):void {
+				var stock:Stock = Stock(event.message.body);
+				var found:Boolean = false;
+				for (var i:int = 0; i < stocks.length; i++) {
+					if (stocks.getItemAt(i).code == stock.code) {
+						stocks.setItemAt(stock, i);
+						found = true;
+						break;
+					}
+				}
+				if (!found)
+					stocks.addItem(stock);
+			}
+			
+			// Disconnect the Consumer from destination
+			// (unsubscribing from the topic is implicit).
+			private function unsubscribe():void {
+				consumer.disconnect();
+				consumer = null;
+				
+				subscribed = false;
+			}
+			
+			// Remove a value from the list of currently displayed values
+			// Change the consumer selector and to receive only the values we're interested in.
+			// We resubscribe the same destination/topic to update the server selector.
+			private function remove():void {
+				if (!dgStocks.selectedItem)
+					return;
+				var idx:int = currentIds.indexOf(dgStocks.selectedItem.code);
+				if (idx >= 0)
+					currentIds.splice(idx, 1);
+				remainingIds.addItem(dgStocks.selectedItem.code);
+				stocks.removeItemAt(dgStocks.selectedIndex);
+				if (currentIds.length == 0)
+					consumer.selector = "code = ''";
+				else
+					consumer.selector = "code IN ('" + currentIds.join("', '") + "')";
+				consumer.subscribe();
+			}
+			
+			// Add a value to the list of currently displayed values
+			// Change the consumer selector to receive only the values we're interested in.
+			// We resubscribe the same destination/topic to update the server selector.
+			private function add():void {
+				if (!ddlCodes.selectedItem)
+					return;
+				currentIds.push(ddlCodes.selectedItem);
+				remainingIds.removeItemAt(ddlCodes.selectedIndex);
+				consumer.selector = "code IN ('" + currentIds.join("', '") + "')";
+				consumer.subscribe();
+			}
+			
+			private function formatNumber(item:Object, column:GridColumn):String {
+				return nf.format(item[column.dataField]);
+			}
+		]]>
+	</fx:Script>
+	
+	<fx:Declarations>
+		<s:ArrayCollection id="stocks"/>
+		
+		<s:NumberFormatter id="nf" fractionalDigits="2"/>
+	</fx:Declarations>
+	
+	<s:Group width="100%" height="100%">
+		<s:layout>
+			<s:HorizontalLayout horizontalAlign="center" verticalAlign="middle"/>
+		</s:layout>
+
+		<s:Panel title="GraniteDS Stock Market Push Sample" width="640" height="480">
+			<s:layout>
+				<s:VerticalLayout paddingLeft="16" paddingRight="16" paddingTop="16" paddingBottom="16"/>
+			</s:layout>
+			
+			<s:DataGrid id="dgStocks" dataProvider="{stocks}" width="100%" height="100%">
+				<s:columns>
+					<s:ArrayList>
+						<s:GridColumn dataField="code" headerText="Code"/>
+						<s:GridColumn dataField="last" headerText="Last" formatter="{nf}">
+							<s:itemRenderer>
+								<fx:Component>
+									<s:GridItemRenderer textAlign="right" verticalCenter="middle">
+										<fx:Script> 
+											<![CDATA[
+												override public function set data(data:Object):void {
+													var oldChange:int = 0;
+													if (this.data && this.data.change != 0)
+														oldChange = this.data.change > 0 ? 1 : -1;
+													
+													super.data = data;
+													
+													var newChange:int = 0;
+													if (data && data.change != 0)
+														newChange = data.change > 0 ? 1 : -1;
+													
+													if (newChange != oldChange)
+														invalidateDisplayList();
+												}
+												
+												override protected function updateDisplayList(unscaledWidth:Number, unscaledHeight:Number):void {
+													super.updateDisplayList(unscaledWidth, unscaledHeight);
+													
+													var g:Graphics = graphics;
+													g.clear();
+													
+													if (data && data.change > 0) {
+														g.beginFill(0x009900, 0.5);
+														g.drawRect(0, 0, unscaledWidth, unscaledHeight);
+														g.endFill();
+													} 
+													else if (data && data.change < 0) {
+														g.beginFill(0xFF0000, 0.5);
+														g.drawRect(0, 0, unscaledWidth, unscaledHeight);
+														g.endFill();
+													}
+												}
+											]]> 
+										</fx:Script>
+										<s:Label id="labelDisplay" left="7" right="7" top="6" bottom="5" fontStyle="normal"/>
+									</s:GridItemRenderer>
+								</fx:Component>
+							</s:itemRenderer>
+						</s:GridColumn>
+						<s:GridColumn dataField="change" headerText="Change" formatter="{nf}">
+							<s:itemRenderer>
+								<fx:Component>
+									<s:DefaultGridItemRenderer textAlign="right">
+										<fx:Script> 
+											<![CDATA[
+												override public function set data(data:Object):void {
+													super.data = data;
+													if (data && data.change < 0)
+														setStyle("color", 0xFF0000);
+													else if (data && data.change > 0)
+														setStyle("color", 0x009900);
+													else
+														setStyle("color", 0x000000);
+												}
+											]]> 
+										</fx:Script>
+									</s:DefaultGridItemRenderer>
+								</fx:Component>
+							</s:itemRenderer>
+						</s:GridColumn>
+						<s:GridColumn dataField="low" headerText="Low" formatter="{nf}">
+							<s:itemRenderer>
+								<fx:Component>
+									<s:DefaultGridItemRenderer textAlign="right"/>
+								</fx:Component>
+							</s:itemRenderer>
+						</s:GridColumn>
+						<s:GridColumn dataField="high" headerText="High" formatter="{nf}">
+							<s:itemRenderer>
+								<fx:Component>
+									<s:DefaultGridItemRenderer textAlign="right"/>
+								</fx:Component>
+							</s:itemRenderer>
+						</s:GridColumn>
+					</s:ArrayList>
+				</s:columns>
+			</s:DataGrid>
+			
+			<s:controlBarContent>
+				<s:Button id="bUnsubscribe" label="Unsubscribe" click="unsubscribe()" enabled="{subscribed}" />
+				<s:Button id="bSubscribe" label="Subscribe" click="subscribe()" enabled="{!subscribed}" />
+				<s:Button id="bRemove" label="Remove" click="remove()" enabled="{dgStocks.selectedItem}"/>
+				<s:DropDownList id="ddlCodes" dataProvider="{remainingIds}"/>
+				<s:Button id="bAdd" label="Add" click="add()" enabled="{ddlCodes.selectedItem}"/>
+			</s:controlBarContent>
+		</s:Panel>
+		
+	</s:Group>
+
+</s:Application>
